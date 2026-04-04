@@ -1,0 +1,91 @@
+# Copyright 2026 Lowplane contributors
+# SPDX-License-Identifier: Apache-2.0
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kerno
+  namespace: kerno-system
+  labels:
+    app.kubernetes.io/name: kerno
+    app.kubernetes.io/component: agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kerno
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kerno
+        app.kubernetes.io/component: agent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: kerno
+      hostPID: true
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        # Run on all nodes, including control-plane.
+        - operator: Exists
+      containers:
+        - name: kerno
+          image: ghcr.io/lowplane/kerno:latest
+          args: ["start"]
+          securityContext:
+            privileged: true
+          ports:
+            - name: metrics
+              containerPort: 9090
+              hostPort: 9090
+              protocol: TCP
+          env:
+            - name: KERNO_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: KERNO_LOG_FORMAT
+              value: "json"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: sys-kernel-debug
+              mountPath: /sys/kernel/debug
+              readOnly: true
+            - name: sys-fs-bpf
+              mountPath: /sys/fs/bpf
+            - name: proc
+              mountPath: /proc
+              readOnly: true
+      volumes:
+        - name: sys-kernel-debug
+          hostPath:
+            path: /sys/kernel/debug
+        - name: sys-fs-bpf
+          hostPath:
+            path: /sys/fs/bpf
+        - name: proc
+          hostPath:
+            path: /proc
