@@ -86,28 +86,28 @@ Kerno is the **missing layer**:
 
 | Feature | Status | Description |
 |---|:---:|---|
-| `kerno doctor` | ✅ | 30-second automated kernel diagnostic with ranked findings |
-| `kerno explain` | ✅ | AI-powered kernel error explanation (no root needed) |
-| `kerno predict` | 🚧 | Predict failures before they happen via trend analysis |
-| Syscall latency tracing | 🚧 | Per-syscall p50/p95/p99 via eBPF |
-| TCP flow monitoring | 🚧 | Retransmits, RTT, connection lifecycle |
-| OOM kill tracking | 🚧 | Pre-kill alerts with full process context |
-| Disk I/O latency | 🚧 | Block I/O per-operation percentiles |
-| Scheduler delay | 🚧 | CPU run queue latency (runqlat) |
-| FD leak detection | 🚧 | Open/close delta tracking per process |
-| AI-powered analysis | ✅ | Cross-signal correlation via Anthropic, OpenAI, or Ollama |
-| Prometheus export | 📋 | `/metrics` endpoint with 14 kernel metrics |
-| Web dashboard | 📋 | Real-time kernel signal visualization |
-| SLO bridge | 📋 | Map kernel signals to error budgets |
-| Kubernetes enrichment | 📋 | Pod/namespace/node context for all signals |
-
-**Legend:** ✅ Done | 🚧 In Progress | 📋 Planned
+| `kerno doctor` | Done | 30-second automated kernel diagnostic with ranked findings |
+| `kerno trace syscall` | Done | Real-time syscall latency streaming with top-N mode |
+| `kerno trace disk` | Done | Block I/O latency tracing per device/operation/process |
+| `kerno trace sched` | Done | CPU run queue delay monitoring with threshold filtering |
+| `kerno watch tcp` | Done | Aggregated TCP connection monitoring (RTT, retransmits) |
+| `kerno watch oom` | Done | OOM kill alerting with score threshold filtering |
+| `kerno watch fd` | Done | FD leak detection via open/close growth rate |
+| `kerno explain` | Done | AI-powered kernel error explanation (no root needed) |
+| `kerno predict` | Done | Predict failures before they happen via trend analysis |
+| `kerno start` | Done | Daemon mode with Prometheus metrics + health endpoints |
+| Prometheus export | Done | `/metrics` endpoint with 16 kernel metrics |
+| K8s enrichment | Done | Pod/namespace/node context via environment adapters |
+| Helm chart | Done | `helm install kerno` with full DaemonSet deployment |
+| AI-powered analysis | Done | Cross-signal correlation via Anthropic, OpenAI, or Ollama |
+| Web dashboard | Planned | Real-time kernel signal visualization |
+| SLO bridge | Planned | Map kernel signals to error budgets |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Linux kernel ≥ 5.8 with BTF support (`ls /sys/kernel/btf/vmlinux`)
+- Linux kernel >= 5.8 with BTF support (`ls /sys/kernel/btf/vmlinux`)
 - Root privileges (or `CAP_BPF` + `CAP_PERFMON`)
 
 ### Install
@@ -118,13 +118,31 @@ git clone https://github.com/lowplane/kerno.git
 cd kerno
 make build
 sudo ./bin/kerno doctor
+```
 
+```bash
 # Docker
 docker run --privileged --pid=host \
+  -v /sys/kernel/debug:/sys/kernel/debug:ro \
+  -v /sys/fs/bpf:/sys/fs/bpf \
+  -v /proc:/proc:ro \
   ghcr.io/lowplane/kerno:latest doctor
 ```
 
-### Usage
+### Kubernetes
+
+```bash
+# Helm (recommended)
+helm install kerno ./deploy/helm/kerno \
+  -n kerno-system --create-namespace
+
+# Or raw manifests
+kubectl apply -f deploy/k8s/
+```
+
+## Usage
+
+### Diagnostics
 
 ```bash
 # 30-second kernel diagnostic
@@ -135,9 +153,6 @@ sudo kerno doctor --duration 10s
 
 # JSON output for CI/CD (exits 1 on critical findings)
 sudo kerno doctor --output json --exit-code
-
-# Continuous monitoring
-sudo kerno doctor --continuous --interval 60s
 
 # AI-powered analysis (requires KERNO_AI_API_KEY)
 sudo kerno doctor --ai
@@ -150,46 +165,162 @@ dmesg | tail -5 | kerno explain
 
 # Predict upcoming failures
 sudo kerno predict --snapshots 5 --interval 15s
-
-# Start as daemon with Prometheus metrics
-sudo kerno start
 ```
+
+### Real-Time Tracing
+
+```bash
+# Stream all syscall events
+sudo kerno trace syscall
+
+# Filter by process
+sudo kerno trace syscall --pid 1234
+
+# Filter by syscall name, JSON output
+sudo kerno trace syscall --filter read --output json
+
+# Top 10 syscalls by p99 latency (refreshing)
+sudo kerno trace syscall --top 10
+
+# Trace disk I/O for a specific process
+sudo kerno trace disk --process postgres
+
+# Only writes above 5ms
+sudo kerno trace disk --op write --threshold 5ms
+
+# Scheduler delays above 10ms
+sudo kerno trace sched --threshold 10ms
+
+# Run for 60 seconds then exit
+sudo kerno trace syscall --duration 60s
+```
+
+### Continuous Monitoring
+
+```bash
+# Watch TCP connections with retransmits
+sudo kerno watch tcp --retransmits
+
+# Only connections with RTT above 5ms
+sudo kerno watch tcp --threshold-rtt 5ms --output json
+
+# Watch for OOM kills with alert banner
+sudo kerno watch oom --alert
+
+# Only OOM events with score above 500
+sudo kerno watch oom --threshold 500
+
+# Detect FD leaks (processes opening >10 FDs/sec)
+sudo kerno watch fd --threshold 10
+
+# Daemon mode with Prometheus metrics
+sudo kerno start
+
+# Custom Prometheus address
+sudo kerno start --prometheus-addr :9091
+```
+
+### Prometheus Metrics
+
+When running `kerno start`, the following metrics are exposed at `:9090/metrics`:
+
+| Metric | Type | Description |
+|---|---|---|
+| `kerno_syscall_duration_nanoseconds` | Summary | Syscall latency (p50, p95, p99) |
+| `kerno_syscall_total` | Counter | Total syscall events |
+| `kerno_tcp_rtt_nanoseconds` | Summary | TCP round-trip time |
+| `kerno_tcp_retransmits_total` | Counter | TCP retransmissions |
+| `kerno_tcp_connections_total` | Counter | TCP connection events |
+| `kerno_oom_kills_total` | Counter | OOM kill events |
+| `kerno_disk_io_duration_nanoseconds` | Summary | Disk I/O latency |
+| `kerno_disk_io_bytes_total` | Counter | Disk I/O bytes |
+| `kerno_sched_delay_nanoseconds` | Summary | CPU run queue delay |
+| `kerno_fd_open_total` | Counter | FD open operations |
+| `kerno_fd_close_total` | Counter | FD close operations |
+| `kerno_collector_events_total` | Counter | Events per collector |
+| `kerno_collector_errors_total` | Counter | Errors per collector |
+| `kerno_bpf_programs_loaded` | Gauge | Loaded eBPF programs |
+| `kerno_info` | Gauge | Build version info |
+
+Health endpoints: `/healthz` and `/readyz` return JSON status.
 
 ## How It Works
 
-```mermaid
-graph TD
-    subgraph Kernel["🔧 Kernel Space — eBPF Programs"]
-        SC[sys_enter / sys_exit]
-        TC[tcp_retransmit_skb]
-        OC[oom_kill_process]
-        DC[block_rq_issue / complete]
-        SD[sched_wakeup / switch]
-        FD[sys_exit_openat / close]
-    end
-
-    RB[Ring Buffers<br/><i>mmap · zero-copy</i>]
-
-    subgraph User["⚡ User Space — Go"]
-        COL[Collectors]
-        SIG[Signals Snapshot]
-        DOC[Doctor Engine<br/><b>9 rules</b>]
-        AI[AI Layer<br/><i>optional · post-processing</i>]
-        OUT[Terminal Report<br/><i>pretty │ JSON</i>]
-        PROM[Prometheus<br/>:9090/metrics]
-    end
-
-    SC & TC & OC & DC & SD & FD --> RB --> COL --> SIG
-    SIG --> DOC --> AI --> OUT
-    SIG --> PROM
-
-    style Kernel fill:#1a1a2e,stroke:#e94560,color:#eee
-    style User fill:#0f3460,stroke:#16213e,color:#eee
-    style RB fill:#533483,stroke:#e94560,color:#fff
-    style AI fill:#e94560,stroke:#fff,color:#fff
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   KERNEL SPACE (eBPF)                       │
+│                                                             │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐      │
+│  │ syscall  │ │   tcp    │ │   oom    │ │ disk_io  │      │
+│  │ latency  │ │ monitor  │ │  track   │ │          │      │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘      │
+│  ┌────┴─────┐ ┌────┴─────┐                                 │
+│  │  sched   │ │ fd_track │                                  │
+│  │  delay   │ │          │                                  │
+│  └────┬─────┘ └────┬─────┘                                  │
+│       │             │                                        │
+│       └──────┬──────┘                                        │
+│              ▼                                               │
+│     ┌─────────────────┐                                      │
+│     │   Ring Buffers   │  256KB per program, zero-copy       │
+│     └────────┬────────┘                                      │
+└──────────────┼──────────────────────────────────────────────┘
+               │
+               ▼
+┌──────────────────────────────────────────────────────────────┐
+│                  USER SPACE (Go)                             │
+│                                                              │
+│  ┌────────────────┐    ┌──────────────────┐                  │
+│  │  BPF Loaders   │───▶│  Metrics Bridge  │──▶ Prometheus    │
+│  │  (cilium/ebpf) │    │  (decode + feed) │    :9090/metrics │
+│  └───────┬────────┘    └──────────────────┘                  │
+│          │                                                    │
+│          ▼                                                    │
+│  ┌────────────────┐    ┌──────────────────┐                  │
+│  │   Collectors   │───▶│  Signals Struct  │                  │
+│  │  (aggregation) │    │  (single snapshot│                  │
+│  └────────────────┘    └───────┬──────────┘                  │
+│                                │                              │
+│                                ▼                              │
+│                   ┌──────────────────────┐                    │
+│                   │    Doctor Engine     │                    │
+│                   │   (11 diag rules)   │                    │
+│                   └──────────┬──────────┘                    │
+│                              │                                │
+│                              ▼                                │
+│                   ┌──────────────────────┐                    │
+│                   │  AI Layer (optional) │                    │
+│                   │  Anthropic / OpenAI  │                    │
+│                   │  Ollama (local)      │                    │
+│                   └──────────┬──────────┘                    │
+│                              │                                │
+│                              ▼                                │
+│                   ┌──────────────────────┐                    │
+│                   │  Output: terminal,   │                    │
+│                   │  JSON, Prometheus    │                    │
+│                   └──────────────────────┘                    │
+│                                                              │
+│  ┌─────────────────────────────────────────────┐             │
+│  │  Environment Adapter (auto-detected)        │             │
+│  │  bare metal │ systemd │ kubernetes           │             │
+│  │  Enriches events with hostname/pod/unit     │             │
+│  └─────────────────────────────────────────────┘             │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-Kerno uses **6 eBPF programs** attached to stable kernel tracepoints. Events flow through ring buffers to Go userspace, where they are aggregated into percentile distributions and analyzed by **9 diagnostic rules**. An optional **AI layer** enriches findings with cross-signal correlation and root cause analysis.
+Kerno uses **6 eBPF programs** attached to stable kernel tracepoints. Events flow through ring buffers to Go userspace, where they are aggregated into percentile distributions and analyzed by **11 diagnostic rules**. An optional **AI layer** enriches findings with cross-signal correlation and root cause analysis.
+
+### Environment Adapters
+
+Kerno automatically detects where it's running and enriches events:
+
+| Environment | Detection | Enrichment |
+|---|---|---|
+| **Bare metal** | Default fallback | hostname, cgroup path |
+| **Systemd** | `/proc/1/comm == systemd` | unit, slice, scope |
+| **Kubernetes** | Service account token present | pod, namespace, node, deployment |
+
+The K8s adapter maps cgroup paths to pod metadata via the Kubelet read-only API with a local cache refreshed every 30 seconds.
 
 ### AI Integration
 
@@ -222,6 +353,77 @@ sudo kerno doctor --ai
 | 7 | Syscall Latency High | Any syscall P99 > 100ms | WARNING / CRITICAL |
 | 8 | OOM Imminent | Memory > 90% + positive growth | WARNING / CRITICAL (with ETA) |
 | 9 | Syscall Error Rate | Error rate > 1% per syscall | WARNING / CRITICAL |
+| 10 | Memory Pressure | RSS usage > 90% | WARNING |
+| 11 | Network Latency | Connection RTT > 100ms | WARNING |
+
+## Kubernetes Deployment
+
+### Helm (Recommended)
+
+```bash
+helm install kerno ./deploy/helm/kerno \
+  -n kerno-system --create-namespace
+```
+
+Customize via `values.yaml`:
+
+```yaml
+# Custom resource limits
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# Enable Prometheus Operator ServiceMonitor
+serviceMonitor:
+  enabled: true
+  interval: 15s
+
+# Restrict to specific nodes
+nodeSelector:
+  monitoring: "true"
+
+# Custom Prometheus port
+prometheus:
+  port: 9091
+```
+
+```bash
+helm upgrade kerno ./deploy/helm/kerno \
+  -n kerno-system -f my-values.yaml
+```
+
+### Raw Manifests
+
+```bash
+kubectl apply -f deploy/k8s/namespace.yaml
+kubectl apply -f deploy/k8s/rbac.yaml
+kubectl apply -f deploy/k8s/daemonset.yaml
+kubectl apply -f deploy/k8s/service.yaml
+
+# Optional: Prometheus Operator ServiceMonitor
+kubectl apply -f deploy/k8s/servicemonitor.yaml
+
+# Optional: PodDisruptionBudget
+kubectl apply -f deploy/k8s/pdb.yaml
+```
+
+### Verify Deployment
+
+```bash
+# Check DaemonSet status
+kubectl -n kerno-system get ds kerno
+
+# Check pod logs
+kubectl -n kerno-system logs -l app.kubernetes.io/name=kerno
+
+# Scrape metrics
+kubectl -n kerno-system port-forward ds/kerno 9090:9090
+curl localhost:9090/metrics
+```
 
 ## Configuration
 
@@ -253,6 +455,10 @@ doctor:
     sched_delay_critical_ns: 20000000   # 20ms
     fd_growth_per_sec: 10.0
 
+prometheus:
+  enabled: true
+  addr: ":9090"
+
 ai:
   enabled: false
   provider: anthropic       # anthropic, openai, ollama
@@ -273,10 +479,13 @@ Environment variables override config: `KERNO_LOG_LEVEL=debug`, `KERNO_AI_API_KE
 make build
 
 # Full build with eBPF compilation
-make build-ebpf
+make bpf && make build
 
 # Run tests
 make test
+
+# Run tests with race detector
+make test-race
 
 # Run linter
 make lint
@@ -292,21 +501,28 @@ make docker
 
 ```
 kerno/
-├── cmd/kerno/           # Binary entry point
+├── cmd/kerno/              # Binary entry point
 ├── internal/
-│   ├── ai/              # LLM provider abstraction (3 backends)
-│   ├── bpf/             # eBPF loaders + Go event types
-│   │   └── c/           # eBPF C programs + headers
-│   ├── cli/             # Cobra CLI commands
-│   ├── collector/       # Signal collection + aggregation
-│   ├── config/          # Typed configuration (Viper)
-│   ├── doctor/          # Diagnostic engine (rules + renderers)
-│   └── version/         # Build metadata
-├── Makefile             # Build orchestration
-├── Dockerfile           # Multi-stage container build
-├── .goreleaser.yml      # Release automation
-└── CLAUDE.md            # AI assistant development guide
+│   ├── adapter/            # Environment adapters (baremetal, systemd, k8s)
+│   ├── ai/                 # LLM provider abstraction (3 backends)
+│   ├── bpf/                # eBPF loaders + Go event types
+│   │   └── c/              # eBPF C programs + headers
+│   ├── cli/                # Cobra CLI commands
+│   ├── collector/           # Signal collection + aggregation
+│   ├── config/              # Typed configuration (Viper)
+│   ├── doctor/              # Diagnostic engine (rules + renderers)
+│   ├── metrics/             # Prometheus metrics registry + bridge
+│   └── version/             # Build metadata
+├── deploy/
+│   ├── k8s/                # Raw Kubernetes manifests
+│   └── helm/kerno/         # Helm chart
+├── docs/                    # Architecture documentation
+├── Dockerfile               # Multi-stage container build
+├── Makefile                 # Build orchestration
+└── .goreleaser.yml          # Release automation
 ```
+
+For detailed architecture documentation, see [docs/architecture.md](docs/architecture.md).
 
 ## Contributing
 
