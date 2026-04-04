@@ -1,0 +1,61 @@
+# Default values for kerno Helm chart.
+
+image:
+  repository: ghcr.io/lowplane/kerno
+  tag: ""  # Defaults to Chart.appVersion
+  pullPolicy: IfNotPresent
+
+# Resource requests and limits for the kerno agent.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Prometheus metrics configuration.
+prometheus:
+  enabled: true
+  port: 9090
+
+# Logging configuration.
+log:
+  level: info
+  format: json
+
+# Collectors to enable.
+collectors:
+  syscallLatency: true
+  tcpMonitor: true
+  oomTrack: true
+  diskIO: true
+  schedDelay: true
+  fdTrack: true
+
+# ServiceMonitor for Prometheus Operator (requires CRD).
+serviceMonitor:
+  enabled: false
+  interval: 15s
+
+# Pod tolerations — by default, run on all nodes including control-plane.
+tolerations:
+  - operator: Exists
+
+# Node selector for restricting kerno to specific nodes.
+nodeSelector: {}
+
+# Affinity rules.
+affinity: {}
+
+# Additional environment variables.
+extraEnv: []
+
+# PodDisruptionBudget.
+pdb:
+  enabled: true
+  maxUnavailable: 1
+
+# Security context for the kerno container.
+securityContext:
+  privileged: true
