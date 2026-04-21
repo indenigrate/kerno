@@ -138,7 +138,7 @@ func runDoctor(ctx context.Context, opts doctorOpts) error {
 		renderer = &doctor.JSONRenderer{Pretty: true}
 	default:
 		renderer = &doctor.PrettyRenderer{
-			NoColor: os.Getenv("NO_COLOR") != "",
+			NoColor: os.Getenv("NO_COLOR") != "" || !isTerminal(),
 		}
 	}
 
