@@ -181,6 +181,8 @@ curl -sfL https://raw.githubusercontent.com/lowplane/kerno/main/scripts/install.
 sudo kerno doctor
 ```
 
+Pin a specific version with `--version v0.1.0`.
+
 ### Or run as a daemon (bare metal / VMs)
 
 ```bash
@@ -209,12 +211,15 @@ sudo ./bin/kerno doctor
 ### Or run it in Docker
 
 ```bash
-docker run --privileged --pid=host \
+docker run --rm --privileged --pid=host \
   -v /sys/kernel/debug:/sys/kernel/debug:ro \
+  -v /sys/kernel/btf:/sys/kernel/btf:ro \
   -v /sys/fs/bpf:/sys/fs/bpf \
   -v /proc:/proc:ro \
-  ghcr.io/lowplane/kerno:latest doctor
+  ghcr.io/lowplane/kerno:v0.1.0 doctor
 ```
+
+Multi-arch images (`linux/amd64`, `linux/arm64`) published to GHCR on every release.
 
 ---
 
