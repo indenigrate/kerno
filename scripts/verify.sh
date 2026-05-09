@@ -87,8 +87,10 @@ for pairing in "${PAIRINGS[@]}"; do
     # Give chaos 1s head start.
     sleep 1
 
-    # Run doctor for 10s — should observe the cascade.
-    sudo "$KERNO" doctor --duration 10s --output json \
+    # Run doctor with the verify-tuned config (looser thresholds so
+    # synthetic chaos on fast hardware trips the rules).
+    sudo "$KERNO" --config scripts/verify-config.yaml \
+        doctor --duration 10s --output json \
         >/tmp/verify-doctor-"$scenario".json 2>/tmp/verify-doctor-"$scenario".log
 
     # Wait for chaos to finish.
