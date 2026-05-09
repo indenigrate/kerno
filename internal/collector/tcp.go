@@ -156,8 +156,12 @@ func (c *TCPCollector) record(event *bpf.TCPEvent) {
 		c.rttHist.Record(rttNs)
 	}
 	if event.EventType == bpf.TCPEventRetransmit {
-		agg.retransmits += event.Retransmits
-		c.totalRetransmits += uint64(event.Retransmits)
+		// Each tracepoint fire = one retransmitted skb. The Retransmits
+		// field in the event payload was reserved for userspace
+		// aggregation that never landed; counting events directly is
+		// the correct kernel-truth signal.
+		agg.retransmits++
+		c.totalRetransmits++
 	}
 }
 
