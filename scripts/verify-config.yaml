@@ -23,9 +23,10 @@ doctor:
     disk_p99_warning_ns:   2000000     # 2ms
     disk_p99_critical_ns: 20000000    # 20ms
 
-    # Scheduler: with 8x CPU oversubscription, runqueue delay typically
-    # lands in the 100us–1ms range. Warn at 500us so the rule fires.
-    sched_delay_warning_ns:   500000  # 500us
+    # Scheduler: empirically p99 runqueue delay under chaos cpu --high
+    # lands at ~200us on a 12-core dev box (measured: p99=196608 ns
+    # with 96 spinners + 48 wakers). Warn at 100us so the rule fires.
+    sched_delay_warning_ns:   100000  # 100us
     sched_delay_critical_ns: 5000000  # 5ms
 
     # FD: chaos opens 200 FDs/s at medium intensity. Default 10/s
