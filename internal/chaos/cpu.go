@@ -11,7 +11,8 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // CPUScenario saturates the host CPU by running tight loops on multiple
@@ -80,16 +81,18 @@ func (s CPUScenario) Run(ctx context.Context, opts Options) error {
 		wg.Add(1)
 		go func(seed int64) {
 			defer wg.Done()
-			r := rand.New(rand.NewSource(seed)) //nolint:gosec
+			// Lock to a dedicated OS thread and sleep via the nanosleep
+			// syscall. time.Sleep parks the goroutine inside Go's
+			// runtime, which can resume it without going through the
+			// kernel scheduler — sched_wakeup never fires. Direct
+			// nanosleep guarantees the OS task transitions from
+			// TASK_INTERRUPTIBLE → TASK_RUNNING, which is what
+			// kerno's sched_delay collector measures.
+			runtime.LockOSThread()
+			r := rand.New(rand.NewSource(seed))          //nolint:gosec
+			ts := unix.Timespec{Sec: 0, Nsec: 1_000_000} // 1 ms
 			for ctx.Err() == nil {
-				// Sleep 1ms — short enough to wake up many times per
-				// second and rack up runqueue delay against the
-				// spinner-saturated CPUs.
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(time.Millisecond):
-				}
+				_ = unix.Nanosleep(&ts, nil)
 				var local float64
 				for k := 0; k < 5_000; k++ {
 					local += math.Sqrt(r.Float64())
