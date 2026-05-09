@@ -5,6 +5,7 @@ package doctor
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/optiqor/kerno/internal/collector"
@@ -288,6 +289,10 @@ func evalFDLeak(s *collector.Signals, t config.DoctorThresholds) []Finding {
 
 // ── Rule 8: Syscall Latency High ────────────────────────────────────────────
 
+// evalSyscallLatencyHigh emits at most one finding per run, even when many
+// (syscall, comm) pairs cross the threshold. The worst pair drives severity
+// and the headline; up to 5 next-worst pairs are listed in evidence.
+// Emitting a finding per pair would swamp the report and obscure other rules.
 func evalSyscallLatencyHigh(s *collector.Signals, t config.DoctorThresholds) []Finding {
 	if s.Syscall == nil {
 		return nil
@@ -296,42 +301,65 @@ func evalSyscallLatencyHigh(s *collector.Signals, t config.DoctorThresholds) []F
 	warningNs := time.Duration(t.SyscallP99WarningNs)
 	criticalNs := time.Duration(t.SyscallP99CriticalNs)
 
-	findings := make([]Finding, 0, len(s.Syscall.Entries))
+	var hot []collector.SyscallEntry
+	sev := SeverityWarning
 	for _, entry := range s.Syscall.Entries {
-		p99 := entry.Latency.P99
-		if p99 < warningNs {
+		if entry.Latency.P99 < warningNs {
 			continue
 		}
-
-		sev := SeverityWarning
-		thresh := warningNs
-		if p99 >= criticalNs {
+		hot = append(hot, entry)
+		if entry.Latency.P99 >= criticalNs {
 			sev = SeverityCritical
-			thresh = criticalNs
 		}
-
-		name := entry.Name
-		if name == "" {
-			name = fmt.Sprintf("syscall_%d", entry.SyscallNr)
-		}
-
-		findings = append(findings, Finding{
-			Severity:  sev,
-			Rule:      "syscall_latency_high",
-			Title:     fmt.Sprintf("High %s() Syscall Latency", name),
-			Signal:    "syscall",
-			Cause:     fmt.Sprintf("%s() P99 latency exceeds threshold", name),
-			Impact:    fmt.Sprintf("Processes calling %s() experience %s latency at the 99th percentile", name, p99),
-			Evidence:  fmt.Sprintf("%s() P99=%s, P50=%s, count=%d (threshold: %s)", name, p99, entry.Latency.P50, entry.Count, thresh),
-			Fix:       []string{fmt.Sprintf("Profile %s() callers: strace -e trace=%s -p <pid>", name, name), "Check if underlying resource (disk, network) is saturated"},
-			Metric:    fmt.Sprintf("syscall_%s_p99", name),
-			Value:     float64(p99.Nanoseconds()),
-			Threshold: float64(thresh.Nanoseconds()),
-			Process:   entry.Comm,
-		})
+	}
+	if len(hot) == 0 {
+		return nil
 	}
 
-	return findings
+	// SyscallSnapshot.Entries is already sorted by P99 desc by the collector.
+	top := hot[0]
+	topName := top.Name
+	if topName == "" {
+		topName = fmt.Sprintf("syscall_%d", top.SyscallNr)
+	}
+
+	thresh := warningNs
+	if sev == SeverityCritical {
+		thresh = criticalNs
+	}
+
+	var ev strings.Builder
+	fmt.Fprintf(&ev, "%d (syscall, comm) pairs exceed P99=%s. Top:", len(hot), thresh)
+	for i, e := range hot {
+		if i >= 6 {
+			break
+		}
+		nm := e.Name
+		if nm == "" {
+			nm = fmt.Sprintf("syscall_%d", e.SyscallNr)
+		}
+		fmt.Fprintf(&ev, " %s(%s)@%s", nm, e.Comm, e.Latency.P99)
+	}
+
+	title := fmt.Sprintf("High Syscall Latency (%d affected)", len(hot))
+	if len(hot) == 1 {
+		title = fmt.Sprintf("High %s() Syscall Latency", topName)
+	}
+
+	return []Finding{{
+		Severity:  sev,
+		Rule:      "syscall_latency_high",
+		Title:     title,
+		Signal:    "syscall",
+		Cause:     fmt.Sprintf("%s() P99 latency exceeds threshold (top of %d affected)", topName, len(hot)),
+		Impact:    fmt.Sprintf("Worst case: %s in %s()", top.Latency.P99, topName),
+		Evidence:  ev.String(),
+		Fix:       []string{fmt.Sprintf("Profile callers: strace -e trace=%s -p <pid>", topName), "Check if underlying resource (disk, network) is saturated"},
+		Metric:    "syscall_p99_max",
+		Value:     float64(top.Latency.P99.Nanoseconds()),
+		Threshold: float64(thresh.Nanoseconds()),
+		Process:   top.Comm,
+	}}
 }
 
 // ── Rule 9: OOM Imminent ─────────────────────────────────────────────────────
@@ -386,49 +414,71 @@ func evalOOMImminent(s *collector.Signals, t config.DoctorThresholds) []Finding 
 
 // ── Rule 10: Syscall Error Rate ──────────────────────────────────────────────
 
+// evalSyscallErrorRate emits at most one finding per run. See the same
+// invariant note on evalSyscallLatencyHigh.
 func evalSyscallErrorRate(s *collector.Signals) []Finding {
 	if s.Syscall == nil {
 		return nil
 	}
 
-	findings := make([]Finding, 0, len(s.Syscall.Entries))
+	type hot struct {
+		entry collector.SyscallEntry
+		rate  float64
+	}
+	var entries []hot
+	sev := SeverityWarning
 	for _, entry := range s.Syscall.Entries {
 		if entry.Count == 0 || entry.ErrorCount == 0 {
 			continue
 		}
-
-		errorRate := float64(entry.ErrorCount) / float64(entry.Count) * 100.0
-		if errorRate < 1.0 {
+		rate := float64(entry.ErrorCount) / float64(entry.Count) * 100.0
+		if rate < 1.0 {
 			continue
 		}
-
-		name := entry.Name
-		if name == "" {
-			name = fmt.Sprintf("syscall_%d", entry.SyscallNr)
-		}
-
-		sev := SeverityWarning
-		if errorRate >= 10.0 {
+		if rate >= 10.0 {
 			sev = SeverityCritical
 		}
-
-		findings = append(findings, Finding{
-			Severity:  sev,
-			Rule:      "syscall_error_rate",
-			Title:     fmt.Sprintf("High %s() Error Rate", name),
-			Signal:    "syscall",
-			Cause:     fmt.Sprintf("%s() is failing %.1f%% of the time", name, errorRate),
-			Impact:    fmt.Sprintf("%d out of %d %s() calls are returning errors", entry.ErrorCount, entry.Count, name),
-			Evidence:  fmt.Sprintf("%s() error rate=%.1f%% (%d errors / %d calls)", name, errorRate, entry.ErrorCount, entry.Count),
-			Fix:       []string{fmt.Sprintf("Trace errors: strace -e trace=%s -Z -p <pid>", name), "Check if the underlying resource is unavailable", "Check errno patterns: perf trace -e %s -p <pid>"},
-			Metric:    fmt.Sprintf("syscall_%s_error_pct", name),
-			Value:     errorRate,
-			Threshold: 1.0,
-			Process:   entry.Comm,
-		})
+		entries = append(entries, hot{entry, rate})
+	}
+	if len(entries) == 0 {
+		return nil
 	}
 
-	return findings
+	// Pick the worst (highest error rate) entry as headline.
+	top := entries[0]
+	for _, e := range entries[1:] {
+		if e.rate > top.rate {
+			top = e
+		}
+	}
+	name := top.entry.Name
+	if name == "" {
+		name = fmt.Sprintf("syscall_%d", top.entry.SyscallNr)
+	}
+
+	var ev strings.Builder
+	fmt.Fprintf(&ev, "%d syscalls have error rate ≥ 1%%. Worst: %s(%s)=%.1f%% (%d/%d).",
+		len(entries), name, top.entry.Comm, top.rate, top.entry.ErrorCount, top.entry.Count)
+
+	title := fmt.Sprintf("High Syscall Error Rate (%d affected)", len(entries))
+	if len(entries) == 1 {
+		title = fmt.Sprintf("High %s() Error Rate", name)
+	}
+
+	return []Finding{{
+		Severity:  sev,
+		Rule:      "syscall_error_rate",
+		Title:     title,
+		Signal:    "syscall",
+		Cause:     fmt.Sprintf("%s() is failing %.1f%% of the time", name, top.rate),
+		Impact:    fmt.Sprintf("%d out of %d %s() calls are returning errors", top.entry.ErrorCount, top.entry.Count, name),
+		Evidence:  ev.String(),
+		Fix:       []string{fmt.Sprintf("Trace errors: strace -e trace=%s -Z -p <pid>", name), "Check if the underlying resource is unavailable"},
+		Metric:    "syscall_error_pct_max",
+		Value:     top.rate,
+		Threshold: 1.0,
+		Process:   top.entry.Comm,
+	}}
 }
 
 // formatBytes returns a human-readable byte size.
