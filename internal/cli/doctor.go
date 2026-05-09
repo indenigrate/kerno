@@ -9,10 +9,12 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/optiqor/kerno/internal/adapter"
 	"github.com/optiqor/kerno/internal/ai"
 	"github.com/optiqor/kerno/internal/bpf"
 	"github.com/optiqor/kerno/internal/collector"
@@ -149,25 +151,18 @@ func runDoctor(ctx context.Context, opts doctorOpts) error {
 	}
 
 	// Build the eBPF loader set + collector registry. Loader failures are
-	// non-fatal — we degrade gracefully and surface the gap in the report.
-	registry, closers, loadedCount, totalCount := buildCollectors(logger)
+	// non-fatal — we degrade gracefully and surface the gap in the report
+	// via a single DEGRADATION panel.
+	build := buildCollectors(logger)
 	defer func() {
-		for _, c := range closers {
+		for _, c := range build.closers {
 			c()
 		}
 	}()
 
-	if loadedCount == 0 && totalCount > 0 {
-		// Nothing loaded. Common causes: not root, no BTF, kernel too old.
-		// Still run the cycle so the renderer can show the empty/healthy
-		// state with the program count footer — useful diagnostic itself.
-		logger.Warn("no eBPF programs loaded; report will reflect zero signals",
-			"hint", "check root privileges, /sys/kernel/btf/vmlinux, and kernel >= 5.8")
-	}
-
 	// Run the diagnostic loop (once, or continuous).
 	for {
-		if err := runDiagnosticCycle(ctx, engine, registry, renderer, opts, logger); err != nil {
+		if err := runDiagnosticCycle(ctx, engine, build, renderer, opts, logger); err != nil {
 			return err
 		}
 
@@ -193,11 +188,22 @@ type noopCloser struct{}
 
 func (noopCloser) Close() error { return nil }
 
+// collectorBuildResult bundles everything runDoctor needs from the
+// collector setup so it can also surface load failures in the report.
+type collectorBuildResult struct {
+	registry *collector.Registry
+	closers  []func()
+	loaded   int
+	total    int
+	failures []doctor.LoadFailure
+}
+
 // buildCollectors loads all enabled eBPF programs and registers a
 // matching live collector for each. Loaders that fail to load are
-// skipped (graceful degradation). Returns the registry, a list of
-// cleanup closures (idempotent), and counters for the report footer.
-func buildCollectors(logger *slog.Logger) (*collector.Registry, []func(), int, int) {
+// skipped (graceful degradation) but their errors are captured into
+// the result so the doctor's pretty renderer can show a single
+// DEGRADATION panel instead of letting WARN logs scatter through.
+func buildCollectors(logger *slog.Logger) collectorBuildResult {
 	registry := collector.NewRegistry(logger)
 	// Up to 7 collectors are registered (6 eBPF + procfs memory).
 	closers := make([]func(), 0, 7)
@@ -297,6 +303,7 @@ func buildCollectors(logger *slog.Logger) (*collector.Registry, []func(), int, i
 	}
 
 	loaded, total := 0, 0
+	var failures []doctor.LoadFailure
 	for _, r := range registrations {
 		if !r.enabled {
 			continue
@@ -304,19 +311,61 @@ func buildCollectors(logger *slog.Logger) (*collector.Registry, []func(), int, i
 		total++
 		coll, closer, err := r.build()
 		if err != nil {
-			logger.Warn("failed to load eBPF program; collector disabled",
+			// Log at DEBUG — the aggregate panel rendered later is the
+			// user-visible signal. Operators who want raw per-program
+			// errors can run with --log-level=debug.
+			logger.Debug("failed to load eBPF program; collector disabled",
 				"program", r.name, "error", err)
+			failures = append(failures, doctor.LoadFailure{
+				Program: r.name,
+				Error:   err.Error(),
+				Hint:    classifyLoadError(err),
+			})
 			continue
 		}
 		closers = append(closers, func() { _ = closer.Close() })
 		if err := registry.Register(coll); err != nil {
-			logger.Warn("failed to register collector", "name", coll.Name(), "error", err)
+			logger.Debug("failed to register collector", "name", coll.Name(), "error", err)
+			failures = append(failures, doctor.LoadFailure{
+				Program: coll.Name(),
+				Error:   err.Error(),
+				Hint:    "internal: collector registration conflict",
+			})
 			continue
 		}
 		loaded++
 	}
 
-	return registry, closers, loaded, total
+	return collectorBuildResult{
+		registry: registry,
+		closers:  closers,
+		loaded:   loaded,
+		total:    total,
+		failures: failures,
+	}
+}
+
+// classifyLoadError maps known eBPF load error patterns to a one-line
+// "what to fix" hint. Returns "" if no specific recipe matches.
+func classifyLoadError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "operation not permitted") || strings.Contains(msg, "permission denied"):
+		return "re-run with sudo, or grant CAP_BPF + CAP_PERFMON to the binary"
+	case strings.Contains(msg, "memlock"):
+		return "increase memlock rlimit (ulimit -l unlimited) or run as root"
+	case strings.Contains(msg, "btf") || strings.Contains(msg, "vmlinux"):
+		return "kernel needs CONFIG_DEBUG_INFO_BTF (kernel >= 5.8 with BTF)"
+	case strings.Contains(msg, "verifier") || strings.Contains(msg, "load program"):
+		return "kernel verifier rejected the program — file an issue with kernel version"
+	case strings.Contains(msg, "no such file") && strings.Contains(msg, "tracepoint"):
+		return "this kernel may lack the required tracepoint — try a newer kernel"
+	default:
+		return ""
+	}
 }
 
 // buildAnalyzer constructs the AI analyzer from configuration.
@@ -369,11 +418,12 @@ func buildAnalyzer(c *config.Config, logger *slog.Logger) (doctor.Analyzer, erro
 func runDiagnosticCycle(
 	ctx context.Context,
 	engine *doctor.Engine,
-	registry *collector.Registry,
+	build collectorBuildResult,
 	renderer doctor.Renderer,
 	opts doctorOpts,
 	logger *slog.Logger,
 ) error {
+	registry := build.registry
 	logger.Debug("starting kernel diagnostic",
 		"duration", opts.duration,
 		"ai", opts.aiEnabled,
@@ -446,6 +496,14 @@ func runDiagnosticCycle(
 	if err != nil {
 		return fmt.Errorf("diagnosis failed: %w", err)
 	}
+
+	// Annotate the report with deployment context (k8s pod, systemd
+	// unit, baremetal hostname) and any eBPF load failures so the
+	// renderer can show a single DEGRADATION panel rather than letting
+	// raw WARN logs scatter through stderr.
+	report.Environment = string(adapter.DetectEnvironment())
+	report.LoadFailures = build.failures
+	report.ProgramsLoaded = build.loaded
 
 	// Phase 4: Render the report.
 	//

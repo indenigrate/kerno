@@ -140,6 +140,30 @@ type Report struct {
 	// the "signals" key so operators can verify thresholds against
 	// observed values. Pretty renderer ignores it.
 	Signals interface{} `json:"-"`
+
+	// Environment describes how kerno is running (kubernetes, systemd,
+	// baremetal). Used by the pretty renderer to add context to the
+	// header so an operator immediately sees "this report is for the
+	// kerno DaemonSet pod on prod-node-7" vs "this is a bare metal box".
+	Environment string
+
+	// LoadFailures lists eBPF programs that could not be loaded during
+	// this run. The pretty renderer surfaces these as a single
+	// "DEGRADATION" panel rather than letting individual WARN log lines
+	// scatter through the output. Empty when everything loaded.
+	LoadFailures []LoadFailure
+}
+
+// LoadFailure describes one eBPF program that failed to load. The
+// renderer presents these aggregated, with a single actionable hint
+// (re-run with sudo, install BTF, etc.) instead of a scroll of warns.
+type LoadFailure struct {
+	Program string `json:"program"`
+	Error   string `json:"error"`
+	// Hint is a one-line "what to fix" suggestion derived from the
+	// error class (permission denied → "re-run with sudo", missing BTF
+	// → "kernel needs CONFIG_DEBUG_INFO_BTF", …).
+	Hint string `json:"hint,omitempty"`
 }
 
 // CountBySeverity returns the number of findings at each severity level.

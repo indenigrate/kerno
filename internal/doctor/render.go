@@ -68,6 +68,7 @@ func newPalette(noColor bool) palette {
 func (r *PrettyRenderer) Render(w io.Writer, report *Report) error {
 	p := newPalette(r.NoColor)
 	r.renderHeader(w, report, p)
+	r.renderDegradation(w, report, p)
 	r.renderTriage(w, report, p)
 	for i := range report.Findings {
 		r.renderFinding(w, &report.Findings[i], p)
@@ -78,6 +79,49 @@ func (r *PrettyRenderer) Render(w io.Writer, report *Report) error {
 	r.renderRecommendedOrder(w, report, p)
 	r.renderSummary(w, report, p)
 	return nil
+}
+
+// renderDegradation surfaces eBPF-load failures as a single visible
+// panel directly under the header. Without this they show up only as
+// scattered WARN log lines on stderr — a poor signal for "your report
+// is missing data and here is exactly how to fix it".
+func (r *PrettyRenderer) renderDegradation(w io.Writer, report *Report, p palette) {
+	if len(report.LoadFailures) == 0 {
+		return
+	}
+
+	// Pick the most actionable hint to headline. If multiple failures
+	// share a hint (typical: "re-run with sudo" for all), use that;
+	// otherwise list each program with its individual hint.
+	hintCounts := map[string]int{}
+	for _, f := range report.LoadFailures {
+		if f.Hint != "" {
+			hintCounts[f.Hint]++
+		}
+	}
+	var topHint string
+	topCount := 0
+	for h, c := range hintCounts {
+		if c > topCount {
+			topHint = h
+			topCount = c
+		}
+	}
+
+	progs := make([]string, len(report.LoadFailures))
+	for i, f := range report.LoadFailures {
+		progs[i] = f.Program
+	}
+
+	fmt.Fprintf(w, "\n %s%s%s ─────────────────────────────────────── %sdegraded%s\n",
+		p.yellow, "▲ EBPF DEGRADATION", p.reset, p.dim, p.reset)
+	fmt.Fprintf(w, "   %s%d/%d eBPF programs failed to load%s: %s\n",
+		p.bold, len(report.LoadFailures), len(report.LoadFailures)+report.ProgramsLoaded, p.reset,
+		strings.Join(progs, ", "))
+	if topHint != "" {
+		fmt.Fprintf(w, "   %sFix:%s %s%s%s\n", p.dim, p.reset, p.yellow, topHint, p.reset)
+	}
+	fmt.Fprintln(w)
 }
 
 // ── Header ──────────────────────────────────────────────────────────────────
@@ -95,6 +139,9 @@ func (r *PrettyRenderer) renderHeader(w io.Writer, report *Report, p palette) {
 	if report.Hostname != "" {
 		meta = append(meta, metaField(p, "Host", report.Hostname))
 	}
+	if report.Environment != "" {
+		meta = append(meta, metaField(p, "Env", report.Environment))
+	}
 	kernel := report.KernelVer
 	if kernel != "" && report.Arch != "" {
 		kernel += " · " + report.Arch
@@ -111,6 +158,11 @@ func (r *PrettyRenderer) renderHeader(w io.Writer, report *Report, p palette) {
 	}
 	if windowText != "" {
 		meta = append(meta, metaField(p, "Window", windowText))
+	}
+	if report.ProgramsLoaded > 0 || len(report.LoadFailures) > 0 {
+		total := report.ProgramsLoaded + len(report.LoadFailures)
+		programs := fmt.Sprintf("%d/%d eBPF loaded", report.ProgramsLoaded, total)
+		meta = append(meta, metaField(p, "Probes", programs))
 	}
 
 	maxRows := len(prKernoLogo)
