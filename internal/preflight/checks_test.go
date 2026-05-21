@@ -18,10 +18,10 @@ func TestParseKernelVersion(t *testing.T) {
 		expectError bool
 	}{
 		{"6.17.0", 6, 17, false},
-		{"5.15.0-91-generic", 5, 15, false},       // Ubuntu
+		{"5.15.0-91-generic", 5, 15, false},           // Ubuntu
 		{"5.14.0-70.13.1.el9_0.x86_64", 5, 14, false}, // RHEL
-		{"6.1.0-rc4", 6, 1, false},                // release candidate
-		{"5.8.0+debug", 5, 8, false},              // custom build
+		{"6.1.0-rc4", 6, 1, false},                    // release candidate
+		{"5.8.0+debug", 5, 8, false},                  // custom build
 		{"5.4.0", 5, 4, false},
 		{"4.19.0", 4, 19, false},
 		{"invalid", 0, 0, true},

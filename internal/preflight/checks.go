@@ -175,9 +175,8 @@ func CheckCgroupV2(opts CheckOptions) Result {
 		}
 	}
 
-	// CGROUP2_SUPER_MAGIC = 0x63677270
-	const cgroup2Magic int64 = 0x63677270
-	if int64(stat.Type) != cgroup2Magic {
+	const cgroup2Magic = 0x63677270
+	if stat.Type != cgroup2Magic {
 		return Result{
 			Name:    "cgroup v2",
 			Status:  StatusFail,
@@ -246,7 +245,7 @@ func CheckCapPerfmon(caps uint64, capErr error) Result {
 // CheckProcReadable verifies that /proc/version is readable.
 func CheckProcReadable(opts CheckOptions) Result {
 	path := filepath.Join(opts.ProcPath, "version")
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // path is constructed from a controlled prefix + constant
 	if err != nil {
 		return Result{
 			Name:    "/proc readable",
@@ -311,7 +310,7 @@ func CheckOutputDir(opts CheckOptions) Result {
 
 	// Write test file to verify write access.
 	probe := filepath.Join(opts.OutputDir, ".kerno-preflight-probe")
-	f, err := os.Create(probe)
+	f, err := os.Create(probe) //nolint:gosec // path is constructed from a controlled prefix + constant
 	if err != nil {
 		return Result{
 			Name:    "Output directory",
@@ -321,7 +320,7 @@ func CheckOutputDir(opts CheckOptions) Result {
 		}
 	}
 	f.Close()
-	os.Remove(probe)
+	_ = os.Remove(probe) // best-effort cleanup
 
 	return Result{
 		Name:    "Output directory",
@@ -457,7 +456,7 @@ func parseKernelVersion(release string) (major, minor int, err error) {
 // utsNameToString converts a [65]int8 (or [65]byte on some archs) utsname
 // field to a Go string, trimming at the first null byte.
 func utsNameToString(arr [65]int8) string {
-	var buf []byte
+	buf := make([]byte, 0, len(arr))
 	for _, b := range arr {
 		if b == 0 {
 			break

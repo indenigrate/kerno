@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -193,16 +192,4 @@ func formatStatusTag(s preflight.Status, noColor bool) string {
 	reset := "\033[0m"
 
 	return color + "[" + label + "]" + reset
-}
-
-// isNoColor returns true if colored output should be suppressed.
-func isNoColor() bool {
-	if os.Getenv("NO_COLOR") != "" {
-		return true
-	}
-	if !isTerminal() {
-		return true
-	}
-	noColor, _ := strings.CutPrefix(os.Getenv("TERM"), "")
-	return noColor == "dumb"
 }
