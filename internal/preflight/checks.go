@@ -7,6 +7,7 @@
 package preflight
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"os"
@@ -333,7 +334,8 @@ func CheckOutputDir(opts CheckOptions) Result {
 // This is a point-in-time check (TOCTOU) — the port may be claimed between
 // the check and kerno startup.
 func CheckPortFree(opts CheckOptions) Result {
-	ln, err := net.Listen("tcp", opts.PromAddr)
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", opts.PromAddr)
 	if err != nil {
 		return Result{
 			Name:    "Prometheus port",

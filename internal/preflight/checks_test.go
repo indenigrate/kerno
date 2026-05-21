@@ -4,6 +4,7 @@
 package preflight
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -114,7 +115,8 @@ func TestCheckPortFree_Available(t *testing.T) {
 
 func TestCheckPortFree_InUse(t *testing.T) {
 	// Bind a port, then check it reports FAIL.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
