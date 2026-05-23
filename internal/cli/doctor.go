@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/optiqor/kerno/internal/adapter"
 	"github.com/optiqor/kerno/internal/ai"
@@ -155,7 +156,7 @@ func runDoctor(ctx context.Context, opts doctorOpts) error {
 		renderer = &doctor.JSONRenderer{Pretty: true}
 	default:
 		renderer = &doctor.PrettyRenderer{
-			NoColor:  os.Getenv("NO_COLOR") != "" || !isTerminal(),
+			NoColor:  viper.GetBool("no_color") || os.Getenv("NO_COLOR") != "" || !isTerminal(),
 			NoBanner: opts.noBanner,
 		}
 	}

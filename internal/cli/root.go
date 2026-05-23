@@ -135,8 +135,13 @@ func initConfig(cmd *cobra.Command) error {
 	if err := v.BindPFlag("log_level", cmd.Root().PersistentFlags().Lookup("log-level")); err != nil {
 		return fmt.Errorf("binding log-level flag: %w", err)
 	}
+
 	if err := v.BindPFlag("log_format", cmd.Root().PersistentFlags().Lookup("log-format")); err != nil {
 		return fmt.Errorf("binding log-format flag: %w", err)
+	}
+
+	if err := v.BindPFlag("no_color", cmd.Root().PersistentFlags().Lookup("no-color")); err != nil {
+		return fmt.Errorf("binding no-color flag: %w", err)
 	}
 
 	// Read config file (not an error if it doesn't exist).
