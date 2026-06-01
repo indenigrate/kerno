@@ -55,6 +55,9 @@ spec:
             - name: sys-kernel-btf
               mountPath: /sys/kernel/btf
               readOnly: true
+            - name: sys-kernel-debug
+              mountPath: /sys/kernel/debug
+              readOnly: true
             - name: proc
               mountPath: /proc
               readOnly: true

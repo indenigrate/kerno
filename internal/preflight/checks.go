@@ -146,17 +146,20 @@ func CheckKernelVersion() Result {
 	}
 }
 
-// CheckBTF verifies that /sys/kernel/btf/vmlinux is readable.
+// CheckBTF verifies that /sys/kernel/btf/vmlinux is readable. It opens the
+// file (not just stat) so a root-readable-only or zero-perm vmlinux fails
+// here instead of later at eBPF load time.
 func CheckBTF(opts CheckOptions) Result {
-	_, err := os.Stat(opts.BTFPath)
+	f, err := os.Open(opts.BTFPath) //nolint:gosec // path is a controlled default or test fixture
 	if err != nil {
 		return Result{
 			Name:    "BTF (BPF Type Format)",
 			Status:  StatusFail,
-			Message: fmt.Sprintf("%s not readable", opts.BTFPath),
-			Detail:  "kernel needs CONFIG_DEBUG_INFO_BTF=y (kernel >= 5.2 with BTF)",
+			Message: fmt.Sprintf("%s not readable: %v", opts.BTFPath, err),
+			Detail:  "kernel needs CONFIG_DEBUG_INFO_BTF=y (kernel >= 5.8 with BTF)",
 		}
 	}
+	f.Close()
 	return Result{
 		Name:    "BTF (BPF Type Format)",
 		Status:  StatusPass,
